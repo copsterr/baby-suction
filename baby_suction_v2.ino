@@ -7,6 +7,8 @@
 
 /* Global instances --------------------------------------------------------- */
 TM1637Display display(SEVSEG_CLK, SEVSEG_DIO);
+#define START_COND_LIMIT 3000
+#define STOP_COND_LIMIT  2000
 
 // VL0X instances
 VL53L0X lox1;
@@ -23,11 +25,15 @@ uint16_t timer1_counter = 0;
 uint16_t g_sevseg_output = 0;
 
 // clock
-volatile clock_t clock = {0, 0, 0};
-uint8_t log_carina = 0;
-uint32_t millis_carina = 0;
-uint8_t tube_removed = 0;
-uint32_t millis_tube_removed = 0;
+volatile clock_t clock        = {0, 0, 0};
+uint32_t millis_trigger_start = 0;  // used for triggering start condition
+uint8_t trigger_start_cond    = 0;
+uint8_t log_carina            = 0;
+uint32_t millis_carina        = 0;
+uint8_t tube_removed          = 0;
+uint32_t millis_tube_removed  = 0;
+uint32_t millis_trigger_stop  = 0;  // used for triggering stop condition
+uint8_t trigger_stop_cond     = 0;
 
 /* constants ---------------------------------------------------------------- */
 const uint8_t sevseg_dotMask = 64;
@@ -74,18 +80,35 @@ void loop()
   case state_idle:
     range1 = getRange(lox1);
 
-    // change state if tube get close
-    if (range1 < 40)
+    // change state when hover more than limits
+    if (range1 < 40 && trigger_start_cond == 0)
     {
-      state = state_clock;
-      buzzBeep(100);
+      // start counter
+      millis_trigger_start = millis();
+      trigger_start_cond = 1;
 
-      Serial.println(F("Clock started!"));
+      Serial.println("Start condition");
     }
-    else
+
+    // check for hovering
+    if (trigger_start_cond)
     {
-      delay(20);
+      if (range1 < 40) // still in range
+      {
+        if (millis() - millis_trigger_start >= START_COND_LIMIT) {
+          buzzBeep(100);
+          state = state_clock;
+          Serial.println("Clock started");
+        }
+      }
+      else  // out of range
+      {
+        millis_trigger_start = millis(); // reset millis
+        trigger_start_cond = 0;
+        Serial.println("Out of range");
+      }
     }
+
     break;
 
   case state_clock:
@@ -128,19 +151,38 @@ void loop()
           millis_carina = 0;
 
           tube_removed = 1;
-          millis_tube_removed = millis();
+          // millis_tube_removed = millis();
         }
       }
     }
 
-    // removing tube
     if (tube_removed) {
-      if (millis() - millis_tube_removed >= 2000) {
-        clock.stop_src = 4;
+      // change state when hover more than limits
+      if (range1 < 40 && trigger_stop_cond == 0)
+      {
+        // start counter
+        millis_trigger_stop = millis();
+        trigger_stop_cond = 1;
+
+        Serial.println("Stop condition");
       }
-      else {
-        if (range1 <= 60) {
-          millis_tube_removed = millis();
+
+      // check for hovering
+      if (trigger_stop_cond)
+      {
+        if (range1 < 40) // still in range
+        {
+          if (millis() - millis_trigger_stop >= STOP_COND_LIMIT) {
+            buzzBeep(100);
+            state = state_stop;
+            Serial.println("Clock stopped");
+          }
+        }
+        else  // out of range
+        {
+          millis_trigger_start = millis(); // reset millis
+          trigger_stop_cond = 0;
+          Serial.println("Out of range");
         }
       }
     }
